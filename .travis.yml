@@ -1,0 +1,33 @@
+language: go
+go:
+  - 1.9.2
+
+script:
+  - make all
+
+deploy:
+  provider: releases
+  api_key:
+    secure: Eo7EkfaI12++tXyQLJceqtuGWG0Lcin0+pXvW66ZZyaSNzE/CQD+XGlbR6LCW9D1TtCrFxwJ4xX+9tDD48cuQrtJDn114A3hfhv35GeSKxc53xQAXyqTyo1nvaB4HIudl6uI2lUzx44OEGYbLKAl8TQtTv9+mb6/as3Zu1mNlxS7H2RHu/zzYWYnTyjrrwtWoUJ1TohKjcpi16nbS3IgXBTIihjvTKQ03oygoMoXyfLXfDiQWWmTAXKy2C5E+XND/4F0H9iFaPiA75pd2xOon2usGUIsirNQ8Q6Yag6enwHlKNbzk+QS94GeJwmyCMuNf5U9MD7p6nZPnxR9dA1lrxjwJm5remjCSmmuCTB30dxPjb9ksNucQMZp7E229p58388RLbxHXgBNgN0OKKlC53/LGfNpZu2Bpnt9w5pN8rySRze2kp4Y+sode+2lsWqLvjFGo7sixybQ0XHlJme3yYi/cFtjdZXN+gCE/sYsb7XBZjtl2mfY6FsFe8fisMPUGwJHvuf+CF2/C3/fHDUsopxWIDWah1xqIyB/Af8CcTUzw1ZaRLKB+K8/cTfEk0WKHJXAYzqXupEf6aGWUkDmlmGeGF9C8G+rqEXlXlTMgID029RMKb1AarR+XyfeHaZ3lmqcmP5lJJ9njIQIEVCh8YGKDVWtkPfLXIZYvRRhPWs=
+  skip_cleanup: true
+  on:
+    go: 1.9.2
+    condition: $TRAVIS_OS_NAME = linux
+    repo: pasztorpisti/sql-migrate
+    tags: true
+  file:
+    - build/sql-migrate-linux-amd64.zip
+    - build/sql-migrate-linux-amd64.zip.sha256
+    - build/sql-migrate-darwin-amd64.zip
+    - build/sql-migrate-darwin-amd64.zip.sha256
+    - build/sql-migrate-windows-amd64.zip
+    - build/sql-migrate-windows-amd64.zip.sha256
+
+notifications:
+  email:
+    on_success: never
+    on_failure: always
+
+sudo: required
+services:
+  - docker
