@@ -31,12 +31,23 @@ solve problems that are usually handled with config files:
 
 ## Installation
 
-### 1. Stable binary release (recommended)
+### Stable binary release (recommended)
 
 [Download](https://github.com/pasztorpisti/sql-migrate/releases)
 and run `sql-migrate -help` for commandline options.
 
-### 2. Unstable dev version
+### Image from the public docker repo
+
+This docker image is useful when you have a CI/CD system
+that runs its build steps in docker containers.
+
+https://hub.docker.com/r/pasztorpisti/sql-migrate/tags/
+
+```bash
+docker pull pasztorpisti/sql-migrate[:version]
+```
+
+### Unstable dev version
 
 ```bash
 go get -u github.com/pasztorpisti/sql-migrate
@@ -106,7 +117,7 @@ After creating one or more migration files you can apply them to the DB:
 
 ```bash
 # It is optional but recommended to dry-run the migration without modifying
-# the database in order to check what a goto command would do the the DB:
+# the database in order to check what a goto command would do with the DB:
 sql-migrate plan -target latest -dir <migrations_dir> -driver <driver> -dsn <dsn>
 
 # Applying the migrations to the DB:
