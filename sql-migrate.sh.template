@@ -1,0 +1,124 @@
+#!/bin/bash
+#
+# TODO: copy this template to your project folder and tailor it to your needs
+#
+
+set -euo pipefail
+cd "$( dirname "$0" )"
+
+# Sets the default database to "dev" but you can override this
+# by setting MIGRATION_DB outside before executing this script.
+MIGRATION_DB="${MIGRATION_DB:-dev}"
+
+# TODO: add/remove databases in this 'case' as you wish
+case "${MIGRATION_DB}" in
+dev)
+	DRIVER=postgres
+	# PostgreSQL DSN format: https://godoc.org/github.com/lib/pq
+	DSN="postgres://test@localhost:5432/db_name?sslmode=disable"
+	;;
+dev-mysql)
+	DRIVER=mysql
+	# MySQL DSN format: https://github.com/go-sql-driver/mysql#dsn-data-source-name
+	DSN="test@tcp(localhost:3306)/db_name"
+	;;
+prod)
+	DRIVER=postgres
+	DSN="postgres://service:password@localhost:5432/db_name"
+	;;
+prod-mysql)
+	DRIVER=mysql
+	DSN="service:password@tcp(localhost:3306)/db_name"
+	;;
+*)
+	>&2 echo "Invalid MIGRATION_DB: ${MIGRATION_DB}"
+	exit 1
+	;;
+esac
+
+MIGRATIONS_TABLE=migrations
+MIGRATIONS_DIR=migrations
+
+MIGRATION_FORWARD_SUFFIX=
+MIGRATION_BACKWARD_SUFFIX=.back
+MIGRATION_NO_TRANSACTION_SUFFIX=.notx
+MIGRATION_EXTENSION=.sql
+
+COMMAND=sql-migrate
+ARGS=()
+
+function main() {
+	[ $# -ne 0 ] || help_exit
+
+	local CMD=$1
+	shift
+
+	ARGS+=("${CMD}")
+
+	case "${CMD}" in
+	init)
+		add_db_args
+		;;
+	status)
+		add_db_args
+		add_dir_args
+		;;
+	plan|goto)
+		add_db_args
+		add_dir_args
+		if [ $# -eq 0 ]; then
+			>&2 echo "Missing <target> parameter."
+			help_exit
+		fi
+		ARGS+=( -target "$1" )
+		shift
+		;;
+	version)
+		;;
+	*)
+		>&2 echo "Invalid command: ${CMD}"
+		help_exit
+	esac
+
+	if [ $# -ne 0 ]; then
+		>&2 echo "Unexpected extra args: $@"
+		help_exit
+	fi
+
+	"${COMMAND}" "${ARGS[@]}"
+}
+
+add_db_args() {
+	ARGS+=(
+		-driver "${DRIVER}"
+		-dsn "${DSN}"
+		-migrations_table "${MIGRATIONS_TABLE}"
+	)
+}
+
+add_dir_args() {
+	ARGS+=(
+		-dir "${MIGRATIONS_DIR}"
+		-fwd "${MIGRATION_FORWARD_SUFFIX}"
+		-bwd "${MIGRATION_BACKWARD_SUFFIX}"
+		-notx "${MIGRATION_NO_TRANSACTION_SUFFIX}"
+		-ext "${MIGRATION_EXTENSION}"
+	)
+}
+
+help_exit() {
+	echo -n "${USAGE}"
+	exit 1
+}
+
+USAGE="Usage: $0 <command>
+
+Commands:
+  init             Create the migrations table in the DB if not exists
+  status           Show info about the current state of the migrations
+  plan <target>    Show the plan that would be executed by a goto command
+  goto <target>    Migrate to a specific version of the DB schema
+  version          Show version info
+"
+
+main "$@"

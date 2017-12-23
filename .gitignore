@@ -1,0 +1,14 @@
+# IntelliJ IDE project files
+/.idea/
+
+/vendor/
+
+# created by `make build`
+/build/
+
+# output of `go build`
+/sql-migrate
+
+# binaries built during integration tests
+/integration-test/mysql-migrate
+/integration-test/postgres-migrate
