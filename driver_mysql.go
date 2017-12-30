@@ -5,6 +5,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -14,10 +15,22 @@ func init() {
 	drivers["mysql"] = newMySQLDriver
 }
 
-func newMySQLDriver(tableName string) Driver {
-	return &mySQLDriver{
-		tableName: quoteMySQLIdentifier(tableName),
+func newMySQLDriver(dsn, tableName string) (Driver, error) {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, err
 	}
+	cfg.MultiStatements = true
+	cfg.ParseTime = true
+	db, err := sql.Open("mysql", cfg.FormatDSN())
+	if err != nil {
+		return nil, err
+	}
+
+	return &mySQLDriver{
+		db:        dbWrapper{db},
+		tableName: quoteMySQLIdentifier(tableName),
+	}, nil
 }
 
 func quoteMySQLIdentifier(s string) string {
@@ -25,29 +38,17 @@ func quoteMySQLIdentifier(s string) string {
 }
 
 type mySQLDriver struct {
+	db        DB
 	tableName string
 }
 
-func (o *mySQLDriver) Open(dsn string) (*sql.DB, error) {
-	cfg, err := mysql.ParseDSN(dsn)
-	if err != nil {
-		return nil, err
+func (o *mySQLDriver) ExecuteStep(st *Step, contents string) error {
+	// MySQL doesn't support DDL statements inside transactions.
+	// For this reason we don't even try to open a transaction.
+	if _, err := o.db.Exec(contents); err != nil {
+		return err
 	}
-	cfg.MultiStatements = true
-	cfg.ParseTime = true
-	return sql.Open("mysql", cfg.FormatDSN())
-}
-
-func (o *mySQLDriver) CreateMigrationsTable(e Execer) error {
-	query := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			%s VARCHAR(255) PRIMARY KEY,
-			%s DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);`,
-		o.tableName, "`name`", "`time`",
-	)
-	_, err := e.Exec(query)
-	return err
+	return o.SetMigrationState(o.db, st.MigrationName, st.ParsedFilename.Direction == DirectionForward)
 }
 
 func (o *mySQLDriver) SetMigrationState(e Execer, migrationName string, forwardMigrated bool) error {
@@ -69,8 +70,20 @@ func (o *mySQLDriver) SetMigrationState(e Execer, migrationName string, forwardM
 	return nil
 }
 
-func (o *mySQLDriver) GetForwardMigratedNames(q Querier) (map[string]struct{}, error) {
-	rows, err := q.Query("SELECT `name` FROM " + o.tableName)
+func (o *mySQLDriver) CreateMigrationsTable() error {
+	query := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			%s VARCHAR(255) PRIMARY KEY,
+			%s DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		o.tableName, "`name`", "`time`",
+	)
+	_, err := o.db.Exec(query)
+	return err
+}
+
+func (o *mySQLDriver) GetForwardMigratedNames() (map[string]struct{}, error) {
+	rows, err := o.db.Query("SELECT `name` FROM " + o.tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -88,4 +101,10 @@ func (o *mySQLDriver) GetForwardMigratedNames(q Querier) (map[string]struct{}, e
 		return nil, fmt.Errorf("row error: %s", err)
 	}
 	return names, nil
+}
+
+func (o *mySQLDriver) Close() {
+	if err := o.db.Close(); err != nil {
+		log.Print(err)
+	}
 }

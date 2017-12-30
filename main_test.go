@@ -1,5 +1,4 @@
 // +build !integration
-//go:generate mockgen -source main.go -destination main_mock_test.go -package main
 
 package main
 
@@ -1086,10 +1085,9 @@ func TestSortAndIndexMigrations(t *testing.T) {
 
 func TestStep(t *testing.T) {
 	t.Run("ExecuteAndLog", func(t *testing.T) {
-		t.Run("logging in case of success", func(t *testing.T) {
+		t.Run("success", func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			driver := NewMockDriver(ctrl)
-			db := NewMockDB(ctrl)
 			printer := NewMockPrinter(ctrl)
 			fileReader := NewMockFileReader(ctrl)
 
@@ -1106,20 +1104,18 @@ func TestStep(t *testing.T) {
 			gomock.InOrder(
 				printer.EXPECT().Print(step.String()+" ... "),
 				fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-				db.EXPECT().Exec(query),
-				driver.EXPECT().SetMigrationState(db, migrationName, true),
+				driver.EXPECT().ExecuteStep(step, query),
 				printer.EXPECT().Print("OK\n"),
 			)
 
-			err := step.ExecuteAndLog(dir, driver, db, fileReader, printer)
+			err := step.ExecuteAndLog(dir, driver, fileReader, printer)
 			require.NoError(t, err)
 			ctrl.Finish()
 		})
 
-		t.Run("logging in case of error", func(t *testing.T) {
+		t.Run("ReadFile error", func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			driver := NewMockDriver(ctrl)
-			db := NewMockDB(ctrl)
 			printer := NewMockPrinter(ctrl)
 			fileReader := NewMockFileReader(ctrl)
 
@@ -1138,47 +1134,15 @@ func TestStep(t *testing.T) {
 				printer.EXPECT().Print("FAILED\n"),
 			)
 
-			err := step.ExecuteAndLog(dir, driver, db, fileReader, printer)
+			err := step.ExecuteAndLog(dir, driver, fileReader, printer)
 			require.Error(t, err)
 			ctrl.Finish()
 		})
-	})
 
-	t.Run("Execute", func(t *testing.T) {
-		t.Run("success: forward with transaction", func(t *testing.T) {
+		t.Run("ExecuteStep error", func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			driver := NewMockDriver(ctrl)
-			db := NewMockDB(ctrl)
-			tx := NewMockTX(ctrl)
-			fileReader := NewMockFileReader(ctrl)
-
-			const query = "my sql query"
-			const dir = "my/dir"
-			const filename = "1_initial_migration.fw.sql"
-			const migrationName = "0001_initial_migration"
-
-			step := newTestStep(filename)
-			step.MigrationName = migrationName
-
-			path := filepath.Join(dir, filename)
-
-			gomock.InOrder(
-				db.EXPECT().Begin().Return(tx, nil),
-				fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-				tx.EXPECT().Exec(query),
-				driver.EXPECT().SetMigrationState(tx, migrationName, true),
-				tx.EXPECT().Commit(),
-			)
-
-			err := step.Execute(dir, driver, db, fileReader)
-			require.NoError(t, err)
-			ctrl.Finish()
-		})
-
-		t.Run("success: forward without transaction", func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			driver := NewMockDriver(ctrl)
-			db := NewMockDB(ctrl)
+			printer := NewMockPrinter(ctrl)
 			fileReader := NewMockFileReader(ctrl)
 
 			const query = "my sql query"
@@ -1192,268 +1156,15 @@ func TestStep(t *testing.T) {
 			path := filepath.Join(dir, filename)
 
 			gomock.InOrder(
+				printer.EXPECT().Print(step.String()+" ... "),
 				fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-				db.EXPECT().Exec(query),
-				driver.EXPECT().SetMigrationState(db, migrationName, true),
+				driver.EXPECT().ExecuteStep(step, query).Return(assert.AnError),
+				printer.EXPECT().Print("FAILED\n"),
 			)
 
-			err := step.Execute(dir, driver, db, fileReader)
-			require.NoError(t, err)
+			err := step.ExecuteAndLog(dir, driver, fileReader, printer)
+			require.Error(t, err)
 			ctrl.Finish()
-		})
-
-		t.Run("success: backward with transaction", func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			driver := NewMockDriver(ctrl)
-			db := NewMockDB(ctrl)
-			tx := NewMockTX(ctrl)
-			fileReader := NewMockFileReader(ctrl)
-
-			const query = "my sql query"
-			const dir = "my/dir"
-			const filename = "1_initial_migration.bw.sql"
-			const migrationName = "0001_initial_migration"
-
-			step := newTestStep(filename)
-			step.MigrationName = migrationName
-
-			path := filepath.Join(dir, filename)
-
-			gomock.InOrder(
-				db.EXPECT().Begin().Return(tx, nil),
-				fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-				tx.EXPECT().Exec(query),
-				driver.EXPECT().SetMigrationState(tx, migrationName, false),
-				tx.EXPECT().Commit(),
-			)
-
-			err := step.Execute(dir, driver, db, fileReader)
-			require.NoError(t, err)
-			ctrl.Finish()
-		})
-
-		t.Run("success: backward without transaction", func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			driver := NewMockDriver(ctrl)
-			db := NewMockDB(ctrl)
-			fileReader := NewMockFileReader(ctrl)
-
-			const query = "my sql query"
-			const dir = "my/dir"
-			const filename = "1_initial_migration.bw.nt.sql"
-			const migrationName = "0001_initial_migration"
-
-			step := newTestStep(filename)
-			step.MigrationName = migrationName
-
-			path := filepath.Join(dir, filename)
-
-			gomock.InOrder(
-				fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-				db.EXPECT().Exec(query),
-				driver.EXPECT().SetMigrationState(db, migrationName, false),
-			)
-
-			err := step.Execute(dir, driver, db, fileReader)
-			require.NoError(t, err)
-			ctrl.Finish()
-		})
-
-		t.Run("error: with transaction", func(t *testing.T) {
-			t.Run("ReadFile error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				tx := NewMockTX(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const dir = "my/dir"
-				const filename = "1_initial_migration.fw.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					db.EXPECT().Begin().Return(tx, nil),
-					fileReader.EXPECT().ReadFile(path).Return(nil, assert.AnError),
-					tx.EXPECT().Rollback(),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
-
-			t.Run("DB.Exec error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				tx := NewMockTX(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const query = "my sql query"
-				const dir = "my/dir"
-				const filename = "1_initial_migration.fw.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					db.EXPECT().Begin().Return(tx, nil),
-					fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-					tx.EXPECT().Exec(query).Return(nil, assert.AnError),
-					tx.EXPECT().Rollback(),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
-
-			t.Run("Driver.SetMigrationState error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				tx := NewMockTX(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const query = "my sql query"
-				const dir = "my/dir"
-				const filename = "1_initial_migration.bw.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					db.EXPECT().Begin().Return(tx, nil),
-					fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-					tx.EXPECT().Exec(query),
-					driver.EXPECT().SetMigrationState(tx, migrationName, false).Return(assert.AnError),
-					tx.EXPECT().Rollback(),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
-
-			t.Run("TX.Commit error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				tx := NewMockTX(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const query = "my sql query"
-				const dir = "my/dir"
-				const filename = "1_initial_migration.fw.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					db.EXPECT().Begin().Return(tx, nil),
-					fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-					tx.EXPECT().Exec(query),
-					driver.EXPECT().SetMigrationState(tx, migrationName, true),
-					tx.EXPECT().Commit().Return(assert.AnError),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
-		})
-
-		t.Run("error: without transaction", func(t *testing.T) {
-			t.Run("ReadFile error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const dir = "my/dir"
-				const filename = "1_initial_migration.fw.nt.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					fileReader.EXPECT().ReadFile(path).Return(nil, assert.AnError),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
-
-			t.Run("DB.Exec error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const query = "my sql query"
-				const dir = "my/dir"
-				const filename = "1_initial_migration.bw.nt.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-					db.EXPECT().Exec(query).Return(nil, assert.AnError),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
-
-			t.Run("Driver.SetMigrationState error", func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				driver := NewMockDriver(ctrl)
-				db := NewMockDB(ctrl)
-				fileReader := NewMockFileReader(ctrl)
-
-				const query = "my sql query"
-				const dir = "my/dir"
-				const filename = "1_initial_migration.bw.nt.sql"
-				const migrationName = "0001_initial_migration"
-
-				step := newTestStep(filename)
-				step.MigrationName = migrationName
-
-				path := filepath.Join(dir, filename)
-
-				gomock.InOrder(
-					fileReader.EXPECT().ReadFile(path).Return([]byte(query), nil),
-					db.EXPECT().Exec(query),
-					driver.EXPECT().SetMigrationState(db, migrationName, false).Return(assert.AnError),
-				)
-
-				err := step.Execute(dir, driver, db, fileReader)
-				require.Equal(t, assert.AnError, err)
-				ctrl.Finish()
-			})
 		})
 	})
 }
