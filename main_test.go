@@ -3,8 +3,11 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -1166,5 +1169,51 @@ func TestStep(t *testing.T) {
 			require.Error(t, err)
 			ctrl.Finish()
 		})
+	})
+}
+
+func TestInterruptDetector(t *testing.T) {
+	newDetector := func(t *testing.T) (_ *gomock.Controller, _ *MockExiter, _ *MockPrinter, _ *interruptDetector, cancel func(), ch chan<- os.Signal) {
+		ctrl := gomock.NewController(t)
+		exiter := NewMockExiter(ctrl)
+		printer := NewMockPrinter(ctrl)
+		id, idCancel, ch := newInternalInterruptDetector(exiter, printer)
+		return ctrl, exiter, printer, id, idCancel, ch
+	}
+
+	t.Run("no signal", func(t *testing.T) {
+		ctrl, _, _, id, idCancel, _ := newDetector(t)
+		defer idCancel()
+
+		id.ExitIfInterrupted()
+
+		ctrl.Finish()
+	})
+
+	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGTERM} {
+		t.Run("signal:"+sig.String(), func(t *testing.T) {
+			ctrl, exiter, printer, id, idCancel, ch := newDetector(t)
+			defer idCancel()
+
+			gomock.InOrder(
+				printer.EXPECT().Print(fmt.Sprintf("\nsignal: %v\n", sig)),
+				exiter.EXPECT().Exit(1),
+			)
+
+			ch <- sig
+			id.waitForSignal()
+			id.ExitIfInterrupted()
+
+			ctrl.Finish()
+		})
+	}
+
+	t.Run("cancel", func(t *testing.T) {
+		ctrl, _, _, id, idCancel, _ := newDetector(t)
+
+		idCancel()
+		id.waitForSignal()
+
+		ctrl.Finish()
 	})
 }
