@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -72,9 +71,9 @@ func cmdInit(args []string) {
 	driverName, dsn, table := addDriverFlags(fs)
 	fs.Parse(args)
 	expectNoArgs(fs)
-	driver, db := processDriverFlags(fs, driverName, dsn, table)
-	defer db.Close()
-	if err := driver.CreateMigrationsTable(db); err != nil {
+	driver := processDriverFlags(fs, driverName, dsn, table)
+	defer driver.Close()
+	if err := driver.CreateMigrationsTable(); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
@@ -96,10 +95,10 @@ func cmdStatus(args []string) {
 
 	expectNoArgs(fs)
 	migrations := processDirFlag(dir, fwd, bwd, notx, ext)
-	driver, db := processDriverFlags(fs, driverName, dsn, table)
-	defer db.Close()
+	driver := processDriverFlags(fs, driverName, dsn, table)
+	defer driver.Close()
 
-	forwardMigrated, err := driver.GetForwardMigratedNames(db)
+	forwardMigrated, err := driver.GetForwardMigratedNames()
 	if err != nil {
 		log.Printf("Error loading migration status from the migrations table: %s", err)
 		os.Exit(1)
@@ -166,10 +165,10 @@ func cmdPlan(args []string) {
 	expectNoArgs(fs)
 	processTargetFlag(target)
 	migrations := processDirFlag(dir, fwd, bwd, notx, ext)
-	driver, db := processDriverFlags(fs, driverName, dsn, table)
-	defer db.Close()
+	driver := processDriverFlags(fs, driverName, dsn, table)
+	defer driver.Close()
 
-	steps := loadStateAndCreatePlan(*target, migrations, driver, db)
+	steps := loadStateAndCreatePlan(*target, migrations, driver)
 	for _, st := range steps {
 		fmt.Println(st)
 	}
@@ -202,12 +201,12 @@ func cmdGoto(args []string) {
 	expectNoArgs(fs)
 	processTargetFlag(target)
 	migrations := processDirFlag(dir, fwd, bwd, notx, ext)
-	driver, db := processDriverFlags(fs, driverName, dsn, table)
-	defer db.Close()
+	driver := processDriverFlags(fs, driverName, dsn, table)
+	defer driver.Close()
 
-	steps := loadStateAndCreatePlan(*target, migrations, driver, db)
+	steps := loadStateAndCreatePlan(*target, migrations, driver)
 	for _, st := range steps {
-		if err := st.ExecuteAndLog(*dir, driver, db, ioutilFileReader{}, fmtPrinter{}); err != nil {
+		if err := st.ExecuteAndLog(*dir, driver, ioutilFileReader{}, fmtPrinter{}); err != nil {
 			log.Print(err)
 			os.Exit(1)
 		}
@@ -215,18 +214,6 @@ func cmdGoto(args []string) {
 	if len(steps) == 0 {
 		fmt.Println("Nothing to migrate.")
 	}
-}
-
-type ioutilFileReader struct{}
-
-func (ioutilFileReader) ReadFile(filename string) ([]byte, error) {
-	return ioutil.ReadFile(filename)
-}
-
-type fmtPrinter struct{}
-
-func (fmtPrinter) Print(s string) {
-	fmt.Print(s)
 }
 
 const versionUsage = `Usage: sql-migrate version
@@ -278,7 +265,7 @@ func addDriverFlags(fs *flag.FlagSet) (driverName, dsn, table *string) {
 	return
 }
 
-func processDriverFlags(fs *flag.FlagSet, driverName, dsn, table *string) (Driver, DB) {
+func processDriverFlags(fs *flag.FlagSet, driverName, dsn, table *string) Driver {
 	if *table == "" {
 		log.Print("The -migrations_table option can't be an empty string.")
 		os.Exit(1)
@@ -294,14 +281,12 @@ func processDriverFlags(fs *flag.FlagSet, driverName, dsn, table *string) (Drive
 		log.Print("Invalid driver: " + *driverName)
 		os.Exit(1)
 	}
-	driver := driverFactory(*table)
-
-	db, err := driver.Open(*dsn)
+	driver, err := driverFactory(*dsn, *table)
 	if err != nil {
-		log.Printf("Error connecting to DB %q: %s", *dsn, err)
+		log.Printf("Error initialising DB driver %q with DSN=%q: %s", *driverName, *dsn, err)
 		os.Exit(1)
 	}
-	return driver, dbWrapper{db}
+	return driver
 }
 
 func addDirFlags(fs *flag.FlagSet) (dir, fwd, bwd, notx, ext *string) {
@@ -367,7 +352,7 @@ func expectNoArgs(fs *flag.FlagSet) {
 	}
 }
 
-var drivers = map[string]func(tableName string) Driver{}
+var drivers = map[string]func(dsn, tableName string) (Driver, error){}
 
 func driverNames() []string {
 	names := make([]string, 0, len(drivers))
@@ -376,44 +361,6 @@ func driverNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-type Driver interface {
-	Open(dsn string) (*sql.DB, error)
-	CreateMigrationsTable(Execer) error
-	SetMigrationState(e Execer, migrationName string, forwardMigrated bool) error
-	GetForwardMigratedNames(Querier) (map[string]struct{}, error)
-}
-
-type Execer interface {
-	Exec(query string, args ...interface{}) (sql.Result, error)
-}
-
-type Querier interface {
-	Query(query string, args ...interface{}) (*sql.Rows, error)
-}
-
-type DB interface {
-	Execer
-	Querier
-	Begin() (TX, error)
-	Close() error
-}
-
-type TX interface {
-	Execer
-	Commit() error
-	Rollback() error
-}
-
-// dbWrapper implements the DB interface
-type dbWrapper struct {
-	*sql.DB
-}
-
-func (o dbWrapper) Begin() (TX, error) {
-	tx, err := o.DB.Begin()
-	return tx, err
 }
 
 type Migrations struct {
@@ -426,55 +373,26 @@ type Migration struct {
 	Backward *Step
 }
 
-type Printer interface {
-	Print(string)
-}
-
-type FileReader interface {
-	ReadFile(filename string) ([]byte, error)
-}
-
 type Step struct {
 	Filename       string
 	MigrationName  string
 	ParsedFilename *ParsedFilename
 }
 
-func (o *Step) ExecuteAndLog(dir string, d Driver, db DB, r FileReader, p Printer) error {
+func (o *Step) ExecuteAndLog(dir string, d Driver, r FileReader, p Printer) error {
 	p.Print(o.String() + " ... ")
-	if err := o.Execute(dir, d, db, r); err != nil {
+
+	contents, err := r.ReadFile(filepath.Join(dir, o.Filename))
+	if err != nil {
+		p.Print("FAILED\n")
+		return err
+	}
+	if err := d.ExecuteStep(o, string(contents)); err != nil {
 		p.Print("FAILED\n")
 		return err
 	}
 	p.Print("OK\n")
 	return nil
-}
-
-func (o *Step) Execute(dir string, d Driver, db DB, r FileReader) error {
-	performStep := func(e Execer) error {
-		query, err := r.ReadFile(filepath.Join(dir, o.Filename))
-		if err != nil {
-			return err
-		}
-		if _, err := e.Exec(string(query)); err != nil {
-			return err
-		}
-		return d.SetMigrationState(e, o.MigrationName, o.ParsedFilename.Direction == DirectionForward)
-	}
-
-	if o.ParsedFilename.NoTx {
-		return performStep(db)
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	if err := performStep(tx); err != nil {
-		tx.Rollback()
-		return err
-	}
-	return tx.Commit()
 }
 
 func (o *Step) String() string {
@@ -666,8 +584,8 @@ loop:
 	return &parsed, nil
 }
 
-func loadStateAndCreatePlan(target string, ms *Migrations, d Driver, db DB) []*Step {
-	forwardMigrated, err := d.GetForwardMigratedNames(db)
+func loadStateAndCreatePlan(target string, ms *Migrations, d Driver) []*Step {
+	forwardMigrated, err := d.GetForwardMigratedNames()
 	if err != nil {
 		log.Printf("Error loading migration status from the migrations table: %s", err)
 		os.Exit(1)

@@ -5,6 +5,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -14,10 +15,15 @@ func init() {
 	drivers["postgres"] = newPostgresDriver
 }
 
-func newPostgresDriver(tableName string) Driver {
-	return &postgresDriver{
-		tableName: quotePostgresIdentifier(tableName),
+func newPostgresDriver(dsn, tableName string) (Driver, error) {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
 	}
+	return &postgresDriver{
+		db:        dbWrapper{db},
+		tableName: quotePostgresIdentifier(tableName),
+	}, nil
 }
 
 func quotePostgresIdentifier(s string) string {
@@ -25,21 +31,31 @@ func quotePostgresIdentifier(s string) string {
 }
 
 type postgresDriver struct {
+	db        DB
 	tableName string
 }
 
-func (o *postgresDriver) Open(dsn string) (*sql.DB, error) {
-	return sql.Open("postgres", dsn)
-}
+func (o *postgresDriver) ExecuteStep(st *Step, contents string) error {
+	performStep := func(e Execer) error {
+		if _, err := e.Exec(contents); err != nil {
+			return err
+		}
+		return o.SetMigrationState(e, st.MigrationName, st.ParsedFilename.Direction == DirectionForward)
+	}
 
-func (o *postgresDriver) CreateMigrationsTable(e Execer) error {
-	_, err := e.Exec(`
-		CREATE TABLE IF NOT EXISTS ` + o.tableName + `(
-			"name" TEXT PRIMARY KEY,
-			"time" TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')
-		);`,
-	)
-	return err
+	if st.ParsedFilename.NoTx {
+		return performStep(o.db)
+	}
+
+	tx, err := o.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := performStep(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 func (o *postgresDriver) SetMigrationState(e Execer, migrationName string, forwardMigrated bool) error {
@@ -61,8 +77,18 @@ func (o *postgresDriver) SetMigrationState(e Execer, migrationName string, forwa
 	return nil
 }
 
-func (o *postgresDriver) GetForwardMigratedNames(q Querier) (map[string]struct{}, error) {
-	rows, err := q.Query(`SELECT "name" FROM ` + o.tableName)
+func (o *postgresDriver) CreateMigrationsTable() error {
+	_, err := o.db.Exec(`
+		CREATE TABLE IF NOT EXISTS ` + o.tableName + `(
+			"name" TEXT PRIMARY KEY,
+			"time" TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')
+		);`,
+	)
+	return err
+}
+
+func (o *postgresDriver) GetForwardMigratedNames() (map[string]struct{}, error) {
+	rows, err := o.db.Query(`SELECT "name" FROM ` + o.tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -80,4 +106,10 @@ func (o *postgresDriver) GetForwardMigratedNames(q Querier) (map[string]struct{}
 		return nil, fmt.Errorf("row error: %s", err)
 	}
 	return names, nil
+}
+
+func (o *postgresDriver) Close() {
+	if err := o.db.Close(); err != nil {
+		log.Print(err)
+	}
 }

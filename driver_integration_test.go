@@ -45,18 +45,9 @@ func testDriver(t *testing.T, driverName string) {
 	dsn := mustGetEnv(driverNameUpper + "_DSN")
 	table := getEnvDefault(driverNameUpper+"MIGRATIONS_TABLE", "migrations")
 
-	t.Run("Open", func(t *testing.T) {
-		driver := driverFactory(table)
-		db, err := driver.Open(dsn)
-		require.NoError(t, err)
-		defer db.Close()
-		err = db.Ping()
-		assert.NoError(t, err)
-	})
-
 	t.Run("CreateMigrationsTable", func(t *testing.T) {
-		tableExists := func(d Driver, q Querier) bool {
-			_, err := d.GetForwardMigratedNames(q)
+		tableExists := func(d Driver) bool {
+			_, err := d.GetForwardMigratedNames()
 			return err == nil
 		}
 
@@ -64,44 +55,53 @@ func testDriver(t *testing.T, driverName string) {
 		// because these tests are DB-independent and don't execute DB-specific
 		// SQL to manipulate/clean the DB between tests.
 		t.Run("table creation succeeds if not exists", func(t *testing.T) {
-			driver := driverFactory(table)
-			db, err := driver.Open(dsn)
+			driver, err := driverFactory(dsn, table)
 			require.NoError(t, err)
-			defer db.Close()
+			defer driver.Close()
 
-			require.False(t, tableExists(driver, db))
+			require.False(t, tableExists(driver), "this test must be run with an empty database")
 
-			err = driver.CreateMigrationsTable(db)
+			err = driver.CreateMigrationsTable()
 			require.NoError(t, err)
 
-			require.True(t, tableExists(driver, db))
+			require.True(t, tableExists(driver))
 		})
 
 		t.Run("table creation succeeds if exists", func(t *testing.T) {
-			driver := driverFactory(table)
-			db, err := driver.Open(dsn)
+			driver, err := driverFactory(dsn, table)
 			require.NoError(t, err)
-			defer db.Close()
+			defer driver.Close()
 
-			err = driver.CreateMigrationsTable(db)
-			require.NoError(t, err)
-
-			require.True(t, tableExists(driver, db))
-
-			err = driver.CreateMigrationsTable(db)
+			err = driver.CreateMigrationsTable()
 			require.NoError(t, err)
 
-			require.True(t, tableExists(driver, db))
+			require.True(t, tableExists(driver))
+
+			err = driver.CreateMigrationsTable()
+			require.NoError(t, err)
+
+			require.True(t, tableExists(driver))
 		})
 	})
 
 	t.Run("GetForwardMigratedNames and SetMigrationState", func(t *testing.T) {
-		driver := driverFactory(table)
-		db, err := driver.Open(dsn)
+		driver, err := driverFactory(dsn, table)
 		require.NoError(t, err)
-		defer db.Close()
-		err = driver.CreateMigrationsTable(db)
+		defer driver.Close()
+		err = driver.CreateMigrationsTable()
 		require.NoError(t, err)
+
+		newTestStep := func(migrationName, filename string) *Step {
+			parsed, err := parseFilename(filename, ".fw", ".bw", ".nt", ".sql")
+			if err != nil {
+				panic(err)
+			}
+			return &Step{
+				Filename:       filename,
+				MigrationName:  migrationName,
+				ParsedFilename: parsed,
+			}
+		}
 
 		nameSet := func(names ...string) map[string]struct{} {
 			set := make(map[string]struct{}, len(names))
@@ -111,27 +111,33 @@ func testDriver(t *testing.T, driverName string) {
 			return set
 		}
 
-		names, err := driver.GetForwardMigratedNames(db)
+		names, err := driver.GetForwardMigratedNames()
 		require.NoError(t, err)
 		assert.Equal(t, nameSet(), names)
 
-		driver.SetMigrationState(db, "0001_initial", true)
-		names, err = driver.GetForwardMigratedNames(db)
+		const noOpQuery = "SELECT 1;"
+
+		err = driver.ExecuteStep(newTestStep("0001_initial", "0001_initial.fw.sql"), noOpQuery)
+		require.NoError(t, err)
+		names, err = driver.GetForwardMigratedNames()
 		require.NoError(t, err)
 		assert.Equal(t, nameSet("0001_initial"), names)
 
-		driver.SetMigrationState(db, "0002", true)
-		names, err = driver.GetForwardMigratedNames(db)
+		err = driver.ExecuteStep(newTestStep("0002", "0002.fw.sql"), noOpQuery)
+		require.NoError(t, err)
+		names, err = driver.GetForwardMigratedNames()
 		require.NoError(t, err)
 		assert.Equal(t, nameSet("0001_initial", "0002"), names)
 
-		driver.SetMigrationState(db, "0003", true)
-		names, err = driver.GetForwardMigratedNames(db)
+		err = driver.ExecuteStep(newTestStep("0003", "0003.fw.sql"), noOpQuery)
+		require.NoError(t, err)
+		names, err = driver.GetForwardMigratedNames()
 		require.NoError(t, err)
 		assert.Equal(t, nameSet("0001_initial", "0002", "0003"), names)
 
-		driver.SetMigrationState(db, "0002", false)
-		names, err = driver.GetForwardMigratedNames(db)
+		err = driver.ExecuteStep(newTestStep("0002", "0002.bw.sql"), noOpQuery)
+		require.NoError(t, err)
+		names, err = driver.GetForwardMigratedNames()
 		require.NoError(t, err)
 		assert.Equal(t, nameSet("0001_initial", "0003"), names)
 	})
