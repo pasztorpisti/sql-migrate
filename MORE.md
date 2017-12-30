@@ -36,6 +36,13 @@ migration step in a separate file. The filenames have to have a specific format.
   - The `-notx` commandline parameter (default: ".notx") sets the suffix that
     makes sure that the given .sql file is executed outside of transactions.
 
+    Useful only with databases that allow DDL statements inside transactions
+    (e.g.: postgres) because this tool automatically executes forward and backward
+    migration steps in their own transactions when this filename suffix isn't used.
+
+    This filename suffix is ignored (and therefore shouldn't be used) with
+    databases that don't support DDL inside transactions (e.g.: mysql).
+
   By default the `-fwd` suffix is an empty string that means if you don't use
   the suffix specified with `-bwd` then the file is automatically a forward step.
 
