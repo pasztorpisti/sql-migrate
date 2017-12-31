@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
+	"os"
 )
 
 type Driver interface {
@@ -47,6 +48,10 @@ type FileReader interface {
 	ReadFile(filename string) ([]byte, error)
 }
 
+type Exiter interface {
+	Exit(int)
+}
+
 // dbWrapper implements the DB interface.
 type dbWrapper struct {
 	*sql.DB
@@ -64,9 +69,23 @@ func (ioutilFileReader) ReadFile(filename string) ([]byte, error) {
 	return ioutil.ReadFile(filename)
 }
 
-// fmtPrinter implements the Printer interface.
-type fmtPrinter struct{}
+// stdoutPrinter implements the Printer interface.
+type stdoutPrinter struct{}
 
-func (fmtPrinter) Print(s string) {
+func (stdoutPrinter) Print(s string) {
 	fmt.Print(s)
+}
+
+// stderrPrinter implements the Printer interface.
+type stderrPrinter struct{}
+
+func (stderrPrinter) Print(s string) {
+	fmt.Fprint(os.Stderr, s)
+}
+
+// osExiter implements the Exiter interface.
+type osExiter struct{}
+
+func (osExiter) Exit(code int) {
+	os.Exit(code)
 }

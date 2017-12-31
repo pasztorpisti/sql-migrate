@@ -379,3 +379,36 @@ func (m *MockFileReader) ReadFile(filename string) ([]byte, error) {
 func (mr *MockFileReaderMockRecorder) ReadFile(filename interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockFileReader)(nil).ReadFile), filename)
 }
+
+// MockExiter is a mock of Exiter interface
+type MockExiter struct {
+	ctrl     *gomock.Controller
+	recorder *MockExiterMockRecorder
+}
+
+// MockExiterMockRecorder is the mock recorder for MockExiter
+type MockExiterMockRecorder struct {
+	mock *MockExiter
+}
+
+// NewMockExiter creates a new mock instance
+func NewMockExiter(ctrl *gomock.Controller) *MockExiter {
+	mock := &MockExiter{ctrl: ctrl}
+	mock.recorder = &MockExiterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use
+func (m *MockExiter) EXPECT() *MockExiterMockRecorder {
+	return m.recorder
+}
+
+// Exit mocks base method
+func (m *MockExiter) Exit(arg0 int) {
+	m.ctrl.Call(m, "Exit", arg0)
+}
+
+// Exit indicates an expected call of Exit
+func (mr *MockExiterMockRecorder) Exit(arg0 interface{}) *gomock.Call {
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exit", reflect.TypeOf((*MockExiter)(nil).Exit), arg0)
+}

@@ -7,11 +7,15 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 )
 
 const usage = `Usage: sql-migrate <command> [command_options...]
@@ -205,11 +209,16 @@ func cmdGoto(args []string) {
 	defer driver.Close()
 
 	steps := loadStateAndCreatePlan(*target, migrations, driver)
+
+	id, idCancel := newInterruptDetector(osExiter{}, stderrPrinter{})
+	defer idCancel()
+
 	for _, st := range steps {
-		if err := st.ExecuteAndLog(*dir, driver, ioutilFileReader{}, fmtPrinter{}); err != nil {
+		if err := st.ExecuteAndLog(*dir, driver, ioutilFileReader{}, stdoutPrinter{}); err != nil {
 			log.Print(err)
 			os.Exit(1)
 		}
+		id.ExitIfInterrupted()
 	}
 	if len(steps) == 0 {
 		fmt.Println("Nothing to migrate.")
@@ -350,6 +359,53 @@ func expectNoArgs(fs *flag.FlagSet) {
 		fs.Usage()
 		os.Exit(1)
 	}
+}
+
+type interruptDetector struct {
+	Signal  atomic.Value
+	Exiter  Exiter
+	Printer Printer
+	wg      sync.WaitGroup
+}
+
+func newInterruptDetector(exiter Exiter, printer Printer) (_ *interruptDetector, cancel func()) {
+	id, cancel, ch := newInternalInterruptDetector(exiter, printer)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	return id, cancel
+}
+
+func newInternalInterruptDetector(exiter Exiter, printer Printer) (_ *interruptDetector, cancel func(), ch chan<- os.Signal) {
+	o := &interruptDetector{
+		Exiter:  exiter,
+		Printer: printer,
+	}
+	chCancel := make(chan struct{})
+	chSignal := make(chan os.Signal, 1)
+
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		select {
+		case sig := <-chSignal:
+			o.Signal.Store(sig)
+		case <-chCancel:
+		}
+	}()
+	return o, func() {
+		close(chCancel)
+		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+	}, chSignal
+}
+
+func (o *interruptDetector) ExitIfInterrupted() {
+	if sig := o.Signal.Load(); sig != nil {
+		o.Printer.Print(fmt.Sprintf("\nsignal: %v\n", sig))
+		o.Exiter.Exit(1)
+	}
+}
+
+func (o *interruptDetector) waitForSignal() {
+	o.wg.Wait()
 }
 
 var drivers = map[string]func(dsn, tableName string) (Driver, error){}
